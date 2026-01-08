@@ -142,7 +142,7 @@ python = "^3.8"
 pykotor = "^2.0.5"
 idna = "*"
 urllib3 = ">=1.26,<2.7"
-Markdown = ">=3.3,<3.10"
+Markdown = ">=3.3,<3.11"
 qtpy = "*"
 send2trash = "*"
 
