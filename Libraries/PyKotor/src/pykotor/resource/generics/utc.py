@@ -30,8 +30,50 @@ from pykotor.resource.formats.gff.gff_auto import (
 from pykotor.resource.type import ResourceType
 
 if TYPE_CHECKING:
-    from pykotor.resource.formats.gff import GFFStruct
     from pykotor.resource.type import SOURCE_TYPES, TARGET_TYPES
+
+
+def _order_ids_preserving_original_slots(
+    current_ids: list[int],
+    original_mapping: dict[int, int],
+) -> list[int]:
+    """Keep original list indices stable and fill removed slots with newly-added ids.
+
+    UTC feat/power widgets represent membership, not list order. When the UI returns checked
+    values in display order, a plain sort-by-original-index appends new values after all
+    retained values. That shifts every original entry after a removed item and produces noisy
+    TSLPatcher diffs.
+    """
+    if not original_mapping:
+        return list(current_ids)
+
+    current_set: set[int] = set(current_ids)
+    added_ids: list[int] = [value for value in current_ids if value not in original_mapping]
+    added_iter = iter(added_ids)
+
+    ordered: list[int] = []
+    for original_id, _original_index in sorted(original_mapping.items(), key=lambda item: item[1]):
+        if original_id in current_set:
+            ordered.append(original_id)
+            continue
+
+        replacement = next(added_iter, None)
+        if replacement is not None:
+            ordered.append(replacement)
+
+    ordered.extend(added_iter)
+    return ordered
+
+
+def _has_original_or_nondefault_root_value(
+    utc: UTC,
+    label: str,
+    value: object,
+    default: object,
+) -> bool:
+    """Return whether a default-valued optional root field should be materialized."""
+    original_fields = utc._original_root_field_names
+    return original_fields is None or label in original_fields or value != default
 
 
 class UTC:
@@ -202,8 +244,9 @@ class UTC:
     BINARY_TYPE = ResourceType.UTC
 
     def __init__(self):
-        # internal use only, to preserve the original order:
+        # Internal use only, to preserve round-trip and diff compatibility.
         self._original_feat_mapping: dict[int, int] = {}
+        self._original_root_field_names: set[str] | None = None
         self._extra_unimplemented_skills: list[int] = []
 
         self.resref: ResRef = ResRef.from_blank()
@@ -359,6 +402,7 @@ def construct_utc(
     utc = UTC()
 
     root = gff.root
+    utc._original_root_field_names = set(root._fields)
     # Root identity: empty strings / blank ResRefs when absent.
 
     utc.resref = root.acquire("TemplateResRef", ResRef.from_blank())
@@ -639,12 +683,20 @@ def dismantle_utc(
     root.set_uint16("PortraitId", utc.portrait_id)
 
     # TODO(th3w1zard1): Add these seemingly missing fields into UTCEditor?
-    root.set_resref("Portrait", utc.portrait_resref)
-    root.set_uint8("SaveWill", utc.save_will)
-    root.set_uint8("SaveFortitude", utc.save_fortitude)
-    root.set_uint8("Morale", utc.morale)
-    root.set_uint8("MoraleRecovery", utc.morale_recovery)
-    root.set_uint8("MoraleBreakpoint", utc.morale_breakpoint)
+    if _has_original_or_nondefault_root_value(
+        utc, "Portrait", utc.portrait_resref, ResRef.from_blank()
+    ):
+        root.set_resref("Portrait", utc.portrait_resref)
+    if _has_original_or_nondefault_root_value(utc, "SaveWill", utc.save_will, 0):
+        root.set_uint8("SaveWill", utc.save_will)
+    if _has_original_or_nondefault_root_value(utc, "SaveFortitude", utc.save_fortitude, 0):
+        root.set_uint8("SaveFortitude", utc.save_fortitude)
+    if _has_original_or_nondefault_root_value(utc, "Morale", utc.morale, 0):
+        root.set_uint8("Morale", utc.morale)
+    if _has_original_or_nondefault_root_value(utc, "MoraleRecovery", utc.morale_recovery, 0):
+        root.set_uint8("MoraleRecovery", utc.morale_recovery)
+    if _has_original_or_nondefault_root_value(utc, "MoraleBreakpoint", utc.morale_breakpoint, 0):
+        root.set_uint8("MoraleBreakpoint", utc.morale_breakpoint)
 
     root.set_uint8("BodyVariation", utc.body_variation)
     root.set_uint8("TextureVar", utc.texture_variation)
@@ -712,28 +764,20 @@ def dismantle_utc(
         class_struct.set_int32("Class", utc_class.class_id)
         class_struct.set_int16("ClassLevel", utc_class.class_level)
         power_list: GFFList = class_struct.set_list("KnownList0", GFFList())
-        for power in utc_class.powers:
+        ordered_powers = _order_ids_preserving_original_slots(
+            utc_class.powers,
+            utc_class._original_powers_mapping,
+        )
+        for power in ordered_powers:
             power_struct = power_list.add(3)
             power_struct.set_uint16("Spell", power)
             power_struct.set_uint8("SpellFlags", 1)
             power_struct.set_uint8("SpellMetaMagic", 0)
 
-        def _sort_powers(power_struct: GFFStruct):
-            return utc_class._original_powers_mapping.get(
-                power_struct.get_uint16("Spell"), float("inf")
-            )
-
-        power_list._structs = sorted(power_list._structs, key=_sort_powers)
-
     feat_list: GFFList = root.set_list("FeatList", GFFList())
-    for feat in utc.feats:
+    ordered_feats = _order_ids_preserving_original_slots(utc.feats, utc._original_feat_mapping)
+    for feat in ordered_feats:
         feat_list.add(1).set_uint16("Feat", feat)
-
-    # Sort utc.feats according to their original index, stored in utc._original_feat_mapping
-    def _sort_feats(feat_struct: GFFStruct):
-        return utc._original_feat_mapping.get(feat_struct.get_uint16("Feat"), float("inf"))
-
-    feat_list._structs = sorted(feat_list._structs, key=_sort_feats)
 
     # Not sure what these are for, verified they exist in K1's 'c_drdg.utc' in data\templates.bif. Might be unused in which case this can be deleted.
     if utc._extra_unimplemented_skills:

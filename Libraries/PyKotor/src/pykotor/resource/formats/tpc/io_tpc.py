@@ -120,9 +120,13 @@ class TPCBinaryReader(ResourceReader):
     @autoclose
     def load(self, *, auto_close: bool = True) -> TPC:  # noqa: PLR0912, C901, PLR0915
         data = self._reader.read_all()
+        # The Kaitai parser is used as a best-effort structural smoke test only.
+        # PyKotor's manual reader below is authoritative because retail TPCs,
+        # especially animated textures with embedded TXI footers, use header
+        # combinations that generated parsers have historically misinterpreted.
         try:
             Tpc.from_bytes(data)
-        except kaitaistruct.KaitaiStructError:
+        except (kaitaistruct.KaitaiStructError, UnicodeDecodeError, OSError, ValueError):
             pass
         self._reader = BinaryReader.from_bytes(data, 0)
 
@@ -130,8 +134,9 @@ class TPCBinaryReader(ResourceReader):
         self._layer_count: int = 1
         self._mipmap_count: int = 0
 
-        data_size: int = self._reader.read_uint32()  # 0x0
-        compressed: bool = data_size != 0
+        header_data_size: int = self._reader.read_uint32()  # 0x0
+        data_size: int = header_data_size
+        compressed: bool = header_data_size != 0
         alpha_test: float = self._reader.read_single()  # 0x4
         self._tpc.alpha_test = alpha_test
         width: int = self._reader.read_uint16()  # 0x8
@@ -179,15 +184,22 @@ class TPCBinaryReader(ResourceReader):
             complete_data_size += tpc_format.get_size(reduced_width, reduced_height)
 
         complete_data_size *= self._layer_count
+        texture_data_size = self._select_texture_data_size(
+            data,
+            default_size=complete_data_size,
+            declared_size=header_data_size,
+        )
 
-        self._reader.skip(0x72 + complete_data_size)
+        self._reader.seek(min(self.IMG_DATA_START_OFFSET + texture_data_size, self._reader.size()))
         txi_data_size: int = self._reader.size() - self._reader.position()
         if txi_data_size > 0:
-            self._tpc.txi = self._reader.read_string(
+            txi_text = self._reader.read_string(
                 txi_data_size,
                 encoding="ascii",
                 errors="ignore",
-            )
+            ).split("\x00", maxsplit=1)[0]
+            if txi_text.strip():
+                self._tpc.txi = txi_text
 
         txi_data: TXI = self._tpc._txi  # noqa: SLF001
         self._tpc.is_animated = bool(
@@ -218,10 +230,11 @@ class TPCBinaryReader(ResourceReader):
 
         if compressed and not self._tpc.is_animated:
             expected_size: int = tpc_format.get_size(width, height)
-            if data_size != expected_size:
+            if data_size < expected_size:
                 raise ValueError(
                     f"Invalid data size for a texture of {width}x{height} pixels and format {tpc_format!r}"
                 )
+            data_size = expected_size
 
         self._reader.seek(self.IMG_DATA_START_OFFSET)
         if (
@@ -236,7 +249,7 @@ class TPCBinaryReader(ResourceReader):
             width,
             height,
         )
-        full_data_size: int = self._reader.size() - self.IMG_DATA_START_OFFSET
+        full_data_size: int = texture_data_size
         if full_data_size < (self._layer_count * full_image_data_size):
             msg: str = f"Insufficient data for image. Expected at least {hex(self._layer_count * full_image_data_size)} bytes, but only {hex(full_data_size)} bytes are available."
             raise ValueError(
@@ -300,6 +313,79 @@ class TPCBinaryReader(ResourceReader):
             self._normalize_cubemaps()
 
         return self._tpc
+
+    def _select_texture_data_size(
+        self,
+        data: bytes,
+        *,
+        default_size: int,
+        declared_size: int,
+    ) -> int:
+        """Choose the texture payload length before an embedded TXI footer.
+
+        Some TPC writers store only the first mip level size in the compressed
+        ``data_size`` header field, while others store the full texture payload
+        size.  Prefer offsets that actually look like an ASCII TXI footer; fall
+        back to PyKotor's historical size calculation otherwise.
+        """
+        candidates: list[int] = []
+        if declared_size > 0:
+            candidates.append(declared_size)
+            if self._layer_count > 1:
+                candidates.append(declared_size * self._layer_count)
+        candidates.append(default_size)
+
+        seen: set[int] = set()
+        for size in candidates:
+            if size in seen:
+                continue
+            seen.add(size)
+            txi_offset = self.IMG_DATA_START_OFFSET + size
+            if self._looks_like_txi_at(data, txi_offset):
+                return size
+
+            shifted_size = self._find_nearby_txi_size(data, size)
+            if shifted_size is not None:
+                return shifted_size
+        return default_size
+
+    def _find_nearby_txi_size(self, data: bytes, size: int) -> int | None:
+        # Legacy animated output can undercount the packed frame/mip payload by
+        # a few DXT min-size blocks because the header mip count was written for
+        # per-frame mips before the TXI footer had been parsed.
+        txi_offset = self.IMG_DATA_START_OFFSET + size
+        scan_end = min(len(data), txi_offset + 1024)
+        for offset in range(txi_offset + 1, scan_end):
+            if self._looks_like_txi_at(data, offset):
+                return offset - self.IMG_DATA_START_OFFSET
+        return None
+
+    @classmethod
+    def _looks_like_txi_at(cls, data: bytes, offset: int) -> bool:
+        if offset < cls.IMG_DATA_START_OFFSET or offset >= len(data):
+            return False
+
+        footer = data[offset:]
+        raw = footer.split(b"\x00", maxsplit=1)[0].lstrip(b"\r\n\t ")
+        if not raw:
+            return False
+
+        first_byte = raw[0]
+        if not (65 <= first_byte <= 90 or 97 <= first_byte <= 122):
+            return False
+
+        sample = raw[:4096]
+        if any(byte < 32 and byte not in b"\r\n\t" for byte in sample):
+            return False
+
+        try:
+            text = raw.decode("ascii").strip()
+        except UnicodeDecodeError:
+            return False
+
+        from pykotor.resource.formats.txi.txi_data import TXI
+
+        return TXI.looks_like_txi(text)
 
     def _normalize_cubemaps(self):
         self._tpc.convert(
@@ -427,16 +513,17 @@ class TPCBinaryWriter(ResourceWriter):
                 raise ValueError(f"Cubemap must have exactly 6 layers, found {self._layer_count}")
             height = frame_height * self._layer_count
 
-        # Calculate data size
-        base_level_size: int = (
-            len(self._tpc.layers[0].mipmaps[0].data)
-            if self._tpc.layers and self._tpc.layers[0].mipmaps
-            else 0
-        )
+        # Calculate data size.  For compressed TPCs this header field is the
+        # texture payload length before any embedded TXI footer.
         data_size: int = 0
         if tpc_format.is_dxt():
-            layers = self._layer_count if self._tpc.is_animated else 1
-            data_size = base_level_size * max(1, layers)
+            data_size = sum(
+                len(layer.mipmaps[mipmap_idx].data)
+                for layer in self._tpc.layers
+                for mipmap_idx in range(min(self._mipmap_count, len(layer.mipmaps)))
+            )
+
+        header_mipmap_count: int = 1 if self._tpc.is_animated else self._mipmap_count
 
         # Write header (128 bytes)
         pixel_encoding: int = self._get_pixel_encoding(tpc_format)
@@ -445,7 +532,7 @@ class TPCBinaryWriter(ResourceWriter):
         self._writer.write_uint16(width)  # 0x08-0x09: Width
         self._writer.write_uint16(height)  # 0x0A-0x0B: Height
         self._writer.write_uint8(pixel_encoding)  # 0x0C: Pixel encoding
-        self._writer.write_uint8(self._mipmap_count)  # 0x0D: Mipmap count
+        self._writer.write_uint8(header_mipmap_count)  # 0x0D: Mipmap count
         self._writer.write_bytes(bytes(0x72))  # 0x0E-0x7F: Reserved padding
 
         # Write texture data for each layer
@@ -485,6 +572,4 @@ class TPCBinaryWriter(ResourceWriter):
             return
         txi_lines = txi_payload.split("\n")
         normalized = "\r\n".join(txi_lines)
-        if not normalized.endswith("\r\n"):
-            normalized += "\r\n"
-        self._writer.write_bytes(normalized.encode("ascii", errors="ignore") + b"\x00")
+        self._writer.write_bytes(normalized.encode("ascii", errors="ignore"))

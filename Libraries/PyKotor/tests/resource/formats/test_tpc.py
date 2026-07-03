@@ -22,7 +22,7 @@ from pykotor.resource.formats.tpc.convert.dxt.compress_dxt_ndix import (
     ndix_compressor_available,
 )
 from pykotor.resource.formats.tpc.manipulate.mipmap_ndix import _js_round, downsample_rgba_ndix
-from pykotor.resource.formats.tpc.tpc_auto import bytes_tpc
+from pykotor.resource.formats.tpc.tpc_auto import bytes_tpc, read_tpc
 from pykotor.resource.formats.tpc.tpc_auto import build_tpc_from_tga_bytes
 from pykotor.resource.type import ResourceType
 from pykotor.resource.formats.tpc.tpc_data import TPC, TPCLayer, TPCMipmap, TPCTextureFormat
@@ -104,6 +104,52 @@ def _minimal_uncompressed_tga(width: int, height: int, pixel_depth: int) -> byte
         row = b"\xff\xff\xff\xff" * width
         return hdr + row * height
     raise ValueError(pixel_depth)
+
+
+def _dxt_mip_chain(width: int, height: int, tpc_format: TPCTextureFormat, seed: int) -> list[TPCMipmap]:
+    """Create a complete power-of-two DXT mip chain with deterministic byte payloads."""
+    mips: list[TPCMipmap] = []
+    level = 0
+    while True:
+        mip_width = max(1, width >> level)
+        mip_height = max(1, height >> level)
+        mip_size = tpc_format.get_size(mip_width, mip_height)
+        mips.append(
+            TPCMipmap(
+                mip_width,
+                mip_height,
+                tpc_format,
+                bytearray([((seed + level) % 251) + 1]) * mip_size,
+            )
+        )
+        if mip_width == 1 and mip_height == 1:
+            return mips
+        level += 1
+
+
+def _animated_dxt1_tpc() -> TPC:
+    """Build a 2x2 cycle texture shaped like PLC_FrcDist02.tpc."""
+    tpc = TPC()
+    tpc._format = TPCTextureFormat.DXT1  # noqa: SLF001
+    tpc.layers = [
+        TPCLayer(_dxt_mip_chain(128, 128, TPCTextureFormat.DXT1, seed))
+        for seed in range(4)
+    ]
+    tpc.is_animated = True
+    tpc.txi = (
+        "proceduretype cycle\r\n"
+        "numx 2\r\n"
+        "numy 2\r\n"
+        "fps 16\r\n"
+        "blending additive\r\n"
+        "downsamplemax 0\r\n"
+        "downsamplemin 0"
+    )
+    return tpc
+
+
+def _total_texture_payload_size(tpc: TPC) -> int:
+    return sum(len(mipmap.data) for layer in tpc.layers for mipmap in layer.mipmaps)
 
 
 class TestTPCData(unittest.TestCase):
@@ -197,6 +243,77 @@ class TestTPCData(unittest.TestCase):
         mipmap = self.tpc.layers[0].mipmaps[0]
         self.assertEqual(mipmap.tpc_format, TPCTextureFormat.RGBA)
         self.assertTrue(all(alpha == 0 for alpha in mipmap.data[3::4]))
+
+    def test_animated_tpc_writer_uses_retail_txi_footer_layout(self):
+        """Cycle TPCs must put TXI immediately after the packed frame/mip payload."""
+        tpc = _animated_dxt1_tpc()
+        total_payload_size = _total_texture_payload_size(tpc)
+
+        raw = bytes_tpc(tpc, ResourceType.TPC)
+
+        self.assertEqual(total_payload_size, struct.unpack_from("<I", raw, 0)[0])
+        self.assertEqual(1, raw[13])
+        txi_offset = 0x80 + total_payload_size
+        self.assertEqual(txi_offset, raw.find(b"proceduretype cycle"))
+        self.assertEqual(txi_offset + len(str(tpc.txi).encode("ascii")), len(raw))
+        self.assertNotIn(b"\x00", raw[txi_offset:])
+        self.assertIn(b"blending additive", raw)
+        self.assertNotIn(b"blending 1", raw)
+
+        parsed = read_tpc(raw)
+        self.assertTrue(parsed.is_animated)
+        self.assertEqual(4, len(parsed.layers))
+        self.assertEqual([8, 8, 8, 8], [len(layer.mipmaps) for layer in parsed.layers])
+        self.assertEqual("cycle", parsed._txi.features.proceduretype)  # noqa: SLF001
+        self.assertEqual(2, parsed._txi.features.numx)  # noqa: SLF001
+        self.assertEqual(2, parsed._txi.features.numy)  # noqa: SLF001
+        self.assertEqual(16.0, parsed._txi.features.fps)  # noqa: SLF001
+        self.assertIn("blending additive", parsed.txi)
+        self.assertNotIn("blending 1", parsed.txi)
+        self.assertIn("downsamplemin 0", parsed.txi)
+
+    def test_tpc_reader_recovers_txi_from_legacy_animated_header(self):
+        """Recover TXI from old Holocron output whose header points 48 bytes before TXI."""
+        tpc = _animated_dxt1_tpc()
+        raw = bytearray(bytes_tpc(tpc, ResourceType.TPC))
+
+        # Legacy writer bug: first-frame mip size * layer count and the in-memory
+        # mip count were written into the header, even though the embedded TXI starts
+        # after the complete packed frame/mip payload.
+        struct.pack_into("<I", raw, 0, TPCTextureFormat.DXT1.get_size(128, 128) * 4)
+        raw[13] = 8
+        raw.extend(b"\x00")
+
+        parsed = read_tpc(bytes(raw))
+
+        self.assertTrue(parsed.is_animated)
+        self.assertEqual(4, len(parsed.layers))
+        self.assertEqual([8, 8, 8, 8], [len(layer.mipmaps) for layer in parsed.layers])
+        self.assertEqual("cycle", parsed._txi.features.proceduretype)  # noqa: SLF001
+        self.assertEqual(2, parsed._txi.features.numx)  # noqa: SLF001
+        self.assertEqual(2, parsed._txi.features.numy)  # noqa: SLF001
+        self.assertEqual(0, parsed._txi.features.downsamplemin)  # noqa: SLF001
+        self.assertIn("blending additive", parsed.txi)
+        self.assertNotIn("blending 1", parsed.txi)
+
+    def test_tpc_reader_detects_full_txi_command_set_at_declared_footer(self):
+        """Footer detection must not depend on a TPC-local curated TXI hint list."""
+        payload = b"\x00" * TPCTextureFormat.DXT1.get_size(4, 4)
+        txi = b"maxSizeHQ 64"
+        raw = bytearray()
+        raw.extend(struct.pack("<I", len(payload)))
+        raw.extend(struct.pack("<f", 1.0))
+        raw.extend(struct.pack("<H", 4))
+        raw.extend(struct.pack("<H", 4))
+        raw.extend(bytes([2, 2]))
+        raw.extend(bytes(0x72))
+        raw.extend(payload)
+        raw.extend(txi)
+
+        parsed = read_tpc(bytes(raw))
+
+        self.assertEqual(64, parsed._txi.features.maxSizeHQ)  # noqa: SLF001
+        self.assertEqual("maxSizeHQ 64", parsed.txi)
 
     def test_dxt5_encode_roundtrip_preserves_color_channels(self):
         """DXT5 encoder must write the color block into the final payload."""

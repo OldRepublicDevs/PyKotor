@@ -405,6 +405,78 @@ class TestUTC(TestCase):
         self.assertEqual(utc.computer_use, 0)
         self.assertEqual(utc.treat_injury, 0)
 
+    def test_dismantle_utc_fills_removed_feat_slot_with_added_feat(self) -> None:
+        """Replacing one feat should not shift every later FeatList entry."""
+        source_xml = """<gff3>
+          <struct id="-1">
+            <list label="SkillList">
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+            </list>
+            <list label="ClassList" />
+            <list label="FeatList">
+              <struct id="1"><uint16 label="Feat">10</uint16></struct>
+              <struct id="1"><uint16 label="Feat">28</uint16></struct>
+              <struct id="1"><uint16 label="Feat">55</uint16></struct>
+            </list>
+            <list label="Equip_ItemList" />
+            <list label="ItemList" />
+          </struct>
+        </gff3>
+        """
+        gff = read_gff(source_xml.encode("utf-8"), file_format=ResourceType.GFF_XML)
+        utc = construct_utc(gff)
+
+        # This mirrors the editor: checked values come back in widget/display order, not in
+        # the original GFF list order. Feat 28 was removed and feat 101 was added.
+        utc.feats = [10, 55, 101]
+
+        rebuilt = dismantle_utc(utc)
+        feat_list = rebuilt.root.get_list("FeatList")
+        self.assertIsNotNone(feat_list)
+        assert feat_list is not None
+        self.assertEqual([entry.get_uint16("Feat") for entry in feat_list], [10, 101, 55])
+
+    def test_dismantle_utc_does_not_materialize_absent_optional_defaults(self) -> None:
+        """Default-valued optional fields absent in the source should stay absent on save."""
+        source_xml = """<gff3>
+          <struct id="-1">
+            <list label="SkillList">
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+              <struct id="0"><byte label="Rank">0</byte></struct>
+            </list>
+            <list label="ClassList" />
+            <list label="FeatList" />
+            <list label="Equip_ItemList" />
+            <list label="ItemList" />
+          </struct>
+        </gff3>
+        """
+        gff = read_gff(source_xml.encode("utf-8"), file_format=ResourceType.GFF_XML)
+        rebuilt = dismantle_utc(construct_utc(gff))
+
+        for label in (
+            "Portrait",
+            "SaveWill",
+            "SaveFortitude",
+            "Morale",
+            "MoraleRecovery",
+            "MoraleBreakpoint",
+        ):
+            self.assertFalse(rebuilt.root.exists(label), label)
+
     def test_read_utc_validates_binary_utc_header(self) -> None:
         """read_utc runs Kaitai GFF parse and requires header type ``UTC `` for binary data."""
         gff = read_gff(TEST_UTC_XML.encode("utf-8"), file_format=ResourceType.GFF_XML)
