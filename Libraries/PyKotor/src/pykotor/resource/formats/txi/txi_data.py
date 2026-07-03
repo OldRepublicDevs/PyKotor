@@ -53,13 +53,15 @@ class TXI(BiowareResource):
     def __init__(self, txi: str | None = None):
         self.features: TXIFeatures = TXIFeatures()
         self._empty: bool = True
-        if txi and txi.strip():
+        if txi is not None:
             self.load(txi)
 
     def load(self, txi: str):  # noqa: C901, PLR0912, PLR0915
         from pykotor.resource.formats.txi.io_txi import TXIReaderMode
 
+        self.features = TXIFeatures()
         self._empty = True
+        txi = txi.replace("\x00", "")
         mode = TXIReaderMode.NORMAL
         cur_coords: int = 0
         max_coords: int = 0
@@ -332,9 +334,9 @@ class TXI(BiowareResource):
     @staticmethod
     def parse_blending(s: str) -> int:
         s_norm = (s or "").strip().lower()
-        if s_norm == "additive":
+        if s_norm in {"additive", "1"}:
             return 1
-        if s_norm in {"punchthrough", "punch-through"}:
+        if s_norm in {"punchthrough", "punch-through", "2"}:
             return 2
         return 0
 
@@ -348,7 +350,9 @@ class TXI(BiowareResource):
                 RobustLogger().error(f"Invalid TXI attribute '{attr}'")
                 continue
             command: TXICommand = TXICommand[upper_attr]
-            if isinstance(value, bool):
+            if command == TXICommand.BLENDING and isinstance(value, int):
+                lines.append(f"{command.value} {self._stringify_blending(value)}")
+            elif isinstance(value, bool):
                 lines.append(f"{command.value} {int(value)}")
             elif isinstance(value, (int, float)):
                 lines.append(f"{command.value} {value}")
@@ -361,6 +365,10 @@ class TXI(BiowareResource):
             else:
                 lines.append(f"{command.value} {value}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _stringify_blending(value: int) -> str:
+        return {1: "additive", 2: "punchthrough"}.get(value, str(value))
 
 
 class TXIFeatures(ComparableMixin):

@@ -13,6 +13,7 @@ Observed retail behavior:
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import IntEnum, auto
 from typing import TYPE_CHECKING
@@ -553,6 +554,8 @@ class TPC(BiowareResource):
 
     def __init__(self):
         self._txi: TXI = TXI()
+        self._txi_text: str = ""
+        self._txi_source_features = None
         self._format: TPCTextureFormat = TPCTextureFormat.Invalid
         self.layers: list[TPCLayer] = []
         self.is_animated: bool = False
@@ -569,13 +572,30 @@ class TPC(BiowareResource):
 
     @property
     def txi(self) -> str:
-        """Get the TXI data as a string."""
+        """Get the TXI data as text.
+
+        Preserve the original TXI footer text when this TPC was loaded from a
+        source file.  The parsed :class:`TXI` object is still populated for
+        feature inspection, animation detection, and compatibility with callers
+        that consume ``_txi.features``.
+        """
+        if (
+            self._txi_text.strip()
+            and self._txi_source_features is not None
+            and vars(self._txi.features) == vars(self._txi_source_features)
+        ):
+            return self._txi_text
         return str(self._txi)
 
     @txi.setter
     def txi(self, value: str):
-        """Set the TXI data from a string."""
-        self._txi.load(value)
+        """Set the TXI data from a string while retaining the source text."""
+        self._txi_text = value.split("\x00", maxsplit=1)[0] if value else ""
+        self._txi = TXI()
+        self._txi_source_features = None
+        if self._txi_text.strip():
+            self._txi.load(self._txi_text)
+            self._txi_source_features = deepcopy(self._txi.features)
 
     def format(self) -> TPCTextureFormat:
         """Get the texture format."""
@@ -720,5 +740,7 @@ class TPC(BiowareResource):
         instance._format = self._format
         instance.is_animated = self.is_animated
         instance.is_cube_map = self.is_cube_map
-        instance._txi = self._txi
+        instance._txi_text = self._txi_text
+        instance._txi_source_features = deepcopy(self._txi_source_features)
+        instance._txi = TXI(self.txi)
         return instance

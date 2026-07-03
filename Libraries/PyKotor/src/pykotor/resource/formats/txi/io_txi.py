@@ -57,6 +57,7 @@ class TXIBinaryReader(ResourceReader):
             txi_text = Txi.from_bytes(txi_bytes).content
         except (kaitaistruct.KaitaiStructError, UnicodeDecodeError):
             txi_text = txi_bytes.decode("ascii", errors="ignore")
+        txi_text = txi_text.replace("\x00", "")
 
         for line in txi_text.splitlines():
             try:
@@ -344,35 +345,4 @@ class TXIBinaryWriter(ResourceWriter):
 
     @autoclose
     def write(self, *, auto_close: bool = True):  # noqa: FBT001, FBT002, ARG002  # pyright: ignore[reportUnusedParameters]
-        from pykotor.resource.formats.txi.txi_data import TXICommand
-
-        lines: list[str] = []
-        for attr, value in vars(self._txi.features).items():
-            if value is None:
-                continue
-            if isinstance(value, list) and len(value) == 0:
-                continue
-            if isinstance(value, str) and len(value) == 0:
-                continue
-            upper_attr = attr.upper()
-            if upper_attr not in TXICommand.__members__:
-                RobustLogger().error(f"Invalid TXI attribute '{attr}'")
-                continue
-            command = TXICommand[upper_attr]
-            if isinstance(value, bool):
-                lines.append(f"{command.value} {int(value)}")
-            elif isinstance(value, (int, float)):
-                lines.append(f"{command.value} {value}")
-            elif isinstance(value, list):
-                if attr in [
-                    TXICommand.UPPERLEFTCOORDS.value.lower(),
-                    TXICommand.LOWERRIGHTCOORDS.value.lower(),
-                ]:
-                    lines.append(f"{command.value} {len(value)}")
-                    lines.extend(" ".join(map(str, coord)) for coord in value)
-                else:
-                    lines.append(f"{command.value} {' '.join(map(str, value))}")
-            else:
-                lines.append(f"{command.value} {value}")
-        txi_string = "\n".join(lines)
-        self._writer.write_string(txi_string)
+        self._writer.write_string(str(self._txi))
