@@ -296,6 +296,25 @@ class TestTPCData(unittest.TestCase):
         self.assertIn("blending additive", parsed.txi)
         self.assertNotIn("blending 1", parsed.txi)
 
+    def test_tpc_reader_detects_full_txi_command_set_at_declared_footer(self):
+        """Footer detection must not depend on a TPC-local curated TXI hint list."""
+        payload = b"\x00" * TPCTextureFormat.DXT1.get_size(4, 4)
+        txi = b"maxSizeHQ 64"
+        raw = bytearray()
+        raw.extend(struct.pack("<I", len(payload)))
+        raw.extend(struct.pack("<f", 1.0))
+        raw.extend(struct.pack("<H", 4))
+        raw.extend(struct.pack("<H", 4))
+        raw.extend(bytes([2, 2]))
+        raw.extend(bytes(0x72))
+        raw.extend(payload)
+        raw.extend(txi)
+
+        parsed = read_tpc(bytes(raw))
+
+        self.assertEqual(64, parsed._txi.features.maxSizeHQ)  # noqa: SLF001
+        self.assertEqual("maxSizeHQ 64", parsed.txi)
+
     def test_dxt5_encode_roundtrip_preserves_color_channels(self):
         """DXT5 encoder must write the color block into the final payload."""
         width, height = 4, 4

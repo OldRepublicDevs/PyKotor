@@ -108,37 +108,6 @@ class TPCBinaryReader(ResourceReader):
 
     MAX_DIMENSIONS: Literal[0x8000] = 0x8000
     IMG_DATA_START_OFFSET: Literal[0x80] = 0x80
-    TXI_COMMAND_HINTS = frozenset(
-        {
-            "alphamean",
-            "blending",
-            "bumpmapscaling",
-            "bumpmaptexture",
-            "bumpyshinytexture",
-            "clamp",
-            "compresstexture",
-            "cube",
-            "decal",
-            "defaultheight",
-            "defaultwidth",
-            "distort",
-            "distortionamplitude",
-            "downsamplemax",
-            "downsamplemin",
-            "envmaptexture",
-            "fps",
-            "isbumpmap",
-            "islightmap",
-            "mipmap",
-            "numx",
-            "numy",
-            "proceduretype",
-            "speed",
-            "waterheight",
-            "waterwidth",
-            "xbox_downsample",
-        }
-    )
 
     def __init__(
         self,
@@ -409,17 +378,14 @@ class TPCBinaryReader(ResourceReader):
         if any(byte < 32 and byte not in b"\r\n\t" for byte in sample):
             return False
 
-        text = raw.decode("ascii", errors="ignore").strip()
-        if not text:
+        try:
+            text = raw.decode("ascii").strip()
+        except UnicodeDecodeError:
             return False
 
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            command = stripped.split(None, maxsplit=1)[0].lower()
-            return command in cls.TXI_COMMAND_HINTS
-        return False
+        from pykotor.resource.formats.txi.txi_data import TXI
+
+        return TXI.looks_like_txi(text)
 
     def _normalize_cubemaps(self):
         self._tpc.convert(

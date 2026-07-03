@@ -332,6 +332,26 @@ class TXI(BiowareResource):
         return self.features
 
     @staticmethod
+    def looks_like_txi(text: str) -> bool:
+        """Return whether text begins with a recognized TXI command.
+
+        TPC readers use this for embedded-footer detection after they have
+        already selected a structurally plausible footer offset. Keep command
+        knowledge centralized here instead of duplicating TXI keyword hints in
+        each container parser.
+        """
+        for line in text.replace("\x00", "").splitlines():
+            parsed_line = line.strip()
+            if not parsed_line:
+                continue
+
+            raw_cmd = parsed_line.split(None, maxsplit=1)[0].strip().upper()
+            if raw_cmd == "DECAL1":  # per_lt06.tpc, per_lt07.tpc
+                raw_cmd = "DECAL"
+            return raw_cmd in TXICommand.__members__
+        return False
+
+    @staticmethod
     def parse_blending(s: str) -> int:
         s_norm = (s or "").strip().lower()
         if s_norm in {"additive", "1"}:

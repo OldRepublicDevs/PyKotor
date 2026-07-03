@@ -65,6 +65,11 @@ class TestTXI(unittest.TestCase):
 
         self.assertEqual(str(txi), "blending additive")
 
+    def test_looks_like_txi_uses_full_command_enum(self):
+        self.assertTrue(TXI.looks_like_txi("maxSizeHQ 64"))
+        self.assertTrue(TXI.looks_like_txi("decal1"))
+        self.assertFalse(TXI.looks_like_txi("notATxiCommand 64"))
+
     def test_tpc_source_txi_regenerates_when_features_change(self):
         from pykotor.resource.formats.tpc.tpc_data import TPC
 
