@@ -43,7 +43,7 @@ jobs:
           uv pip install pytest pytest-cov pytest-xdist coverage[toml]
 
       - name: Set up Node.js (TGA↔TPC ndix parity)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
