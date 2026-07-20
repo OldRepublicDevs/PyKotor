@@ -131,7 +131,7 @@ jobs:
         PYTHON_SCRIPT
     - name: Set up ${{ matrix.python_pypy }} ${{ matrix.python-version }}
       if: ${{ matrix.python_pypy == 'pypy' }}
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         architecture: ${{ matrix.architecture }}
