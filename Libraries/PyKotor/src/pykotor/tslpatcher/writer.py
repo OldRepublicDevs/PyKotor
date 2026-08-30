@@ -1173,8 +1173,14 @@ class TSLPatcherINISerializer:
                 lines.append(
                     f"Hack{offset:08X}={self._format_ini_value(f'2DAMEMORY{token_id_or_value}')}"
                 )
+            elif token_type is NCSTokenType.UINT8:
+                lines.append(f"Hack{offset:08X}={self._format_ini_value(f'u8:{token_id_or_value}')}")
+            elif token_type is NCSTokenType.UINT16:
+                lines.append(
+                    f"Hack{offset:08X}={self._format_ini_value(f'u16:{token_id_or_value}')}"
+                )
             else:
-                # Direct value (uint8, uint16, uint32)
+                # Official TSLPatcher LongInt / explicit u32: unprefixed decimal.
                 lines.append(f"Hack{offset:08X}={self._format_ini_value(str(token_id_or_value))}")
 
         lines.append("")

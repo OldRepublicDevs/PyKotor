@@ -19,8 +19,24 @@
     {
       "id": "hacklist_uint16_literal",
       "issue": 83,
-      "description": "[HACKList] applies u16 literal patch at decimal offset",
+      "description": "[HACKList] unprefixed 8=1234 writes a 4-byte big-endian LongInt on .ncs",
       "fixture_dir": "hacklist_uint16",
+      "expect": "pass",
+      "skip": false,
+      "assertions": [
+        {
+          "type": "ncs_bytes_at_offset",
+          "file": "Override/test.ncs",
+          "offset": 8,
+          "hex": "000004d2"
+        }
+      ]
+    },
+    {
+      "id": "hacklist_u16_prefix",
+      "issue": 83,
+      "description": "[HACKList] explicit u16: prefix keeps a 2-byte big-endian write",
+      "fixture_dir": "hacklist_u16_prefix",
       "expect": "pass",
       "skip": false,
       "assertions": [
