@@ -831,8 +831,10 @@ class ConfigReader:
             else:
                 offset = int(offset_str, 10)
 
-            # Parse type specifier and value
-            type_specifier: str = "u16"  # Default to 16-bit unsigned
+            # Parse type specifier and value. Official TSLPatcher writes unprefixed
+            # values as LongInt (4 bytes). u8/u16/u32 remain optional HoloPatcher
+            # width prefixes.
+            type_specifier: str = "u32"
             parsed_value: str = value_str
             if ":" in value_str:
                 type_specifier, parsed_value = value_str.split(":", 1)
@@ -863,7 +865,7 @@ class ConfigReader:
             offset: Byte offset in NCS file
             value_str: Raw value string from INI
             lower_value: Lowercased value string for comparison
-            type_specifier: Type specifier (u8, u16, u32)
+            type_specifier: Type specifier (u8, u16, u32). Empty or unknown values use u32.
 
         Returns:
         -------
@@ -886,10 +888,10 @@ class ConfigReader:
 
         if type_specifier == "u8":
             return ModifyNCS(NCSTokenType.UINT8, offset, value)
-        if type_specifier == "u32":
-            return ModifyNCS(NCSTokenType.UINT32, offset, value)
-        # Default to u16
-        return ModifyNCS(NCSTokenType.UINT16, offset, value)
+        if type_specifier == "u16":
+            return ModifyNCS(NCSTokenType.UINT16, offset, value)
+        # Default matches official TSLPatcher LongInt writes.
+        return ModifyNCS(NCSTokenType.UINT32, offset, value)
 
     @staticmethod
     def _parse_int_value(value_str: str) -> int:

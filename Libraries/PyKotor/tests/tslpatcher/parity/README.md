@@ -53,7 +53,7 @@ QT_QPA_PLATFORM=offscreen uv run pytest --import-mode=importlib -m "not gui and 
 
 | Issue | Topic | Status |
 |-------|-------|--------|
-| #83 | `[HACKList]` | Active (u16/u32 literals) |
+| #83 | `[HACKList]` | Active (official LongInt default, optional u16/u32 prefixes) |
 | #55 | Required/RequiredMsg namespaces | Skipped — fixture TBD |
 | #53 | GFF ListIndex / TypeId | Skipped — fixture TBD |
 | #67 | Namespace script compile | TBD |
@@ -62,7 +62,7 @@ QT_QPA_PLATFORM=offscreen uv run pytest --import-mode=importlib -m "not gui and 
 ## Notes
 
 - Runner uses library `ConfigReader` + `ModificationsNCS.apply` — no HoloPatcher submodule required.
-- HACKList typed literals use `u32:VALUE` syntax in INI (e.g. `0x10=u32:12345678`), not `VALUE:u32`.
+- Unprefixed HACKList values match official TSLPatcher: 4-byte LongInt, big-endian on `.ncs`, little-endian otherwise. Optional `u8:`/`u16:`/`u32:` prefixes keep HoloPatcher width overrides (`0x10=u32:12345678`, not `VALUE:u32`).
 - Manifest is JSON (stdlib) rather than YAML to avoid optional dependencies in minimal test runs.
 - Use synthetic NCS buffers only unless mod redistribution is cleared.
 - Classic TSLPatcher binary comparison on Windows is out of scope for this harness.

@@ -120,6 +120,16 @@ class ModifyNCS:
             msg = f"Unknown token type '{self.token_type}' in HACKList patch"
             raise ValueError(msg)
 
+    @staticmethod
+    def _uses_ncs_byte_order(sourcefile: str) -> bool:
+        """Return True when official TSLPatcher would byte-swap the LongInt write.
+
+        Delphi DoFileHack checks the last three characters of the target filename
+        and reverses native little-endian LongInt bytes when that suffix is ncs.
+        See KotORPublicDomain/TSLPatcher UTSLPatcher.pas DoFileHack.
+        """
+        return sourcefile.lower()[-3:] == "ncs"
+
     def _write_strref(
         self,
         writer: BinaryWriter,
@@ -154,7 +164,7 @@ class ModifyNCS:
         logger.add_verbose(
             f"HACKList {sourcefile}: writing signed DWORD (32-bit) {value} at offset {self.offset:#X}"
         )
-        writer.write_int32(value, big=True)
+        writer.write_int32(value, big=self._uses_ncs_byte_order(sourcefile))
 
     def _write_2damemory(
         self,
@@ -200,7 +210,7 @@ class ModifyNCS:
         logger.add_verbose(
             f"HACKList {sourcefile}: writing signed DWORD (32-bit) {value} at offset {self.offset:#X}"
         )
-        writer.write_int32(value, big=True)
+        writer.write_int32(value, big=self._uses_ncs_byte_order(sourcefile))
 
     def _write_uint32(
         self,
@@ -208,12 +218,19 @@ class ModifyNCS:
         logger: PatchLogger,
         sourcefile: str,
     ):
-        """Write a 32-bit unsigned integer literal."""
+        """Write a 32-bit integer literal using official TSLPatcher LongInt width.
+
+        Unprefixed HACKList values are LongInt in Delphi and are always written as
+        4 bytes. NCS targets are stored big-endian; every other extension keeps
+        native little-endian byte order.
+        """
         value = self.token_id_or_value
+        big = self._uses_ncs_byte_order(sourcefile)
+        endian_label = "big-endian" if big else "little-endian"
         logger.add_verbose(
-            f"HACKList {sourcefile}: writing unsigned DWORD (32-bit) {value} at offset {self.offset:#X}"
+            f"HACKList {sourcefile}: writing LongInt (32-bit {endian_label}) {value} at offset {self.offset:#X}"
         )
-        writer.write_uint32(value, big=True)
+        writer.write_uint32(value, big=big)
 
     def _write_uint16(
         self,
